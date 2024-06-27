@@ -1,0 +1,138 @@
+--- lua/ge/extensions/core/remoteController.lua
++++ lua/ge/extensions/core/remoteController.lua
+@@ -15,6 +15,7 @@
+ local random = math.random
+ 
+ local qrencode = require("libs/luaqrcode/qrencode")
++local struct = require("libs/luastruct/struct")
+ 
+ local M = {}
+ 
+@@ -108,55 +109,96 @@
+           local nAxes = 1
+           local nButtons = 2
+           local nPovs = 0
++          
++          if #args > 4 then
++            nAxes = tonumber(args[4])
++            nButtons = tonumber(args[5])
++          end
++
+           local deviceInst = extensions.core_input_virtualInput.createDevice(deviceName, "bngremotectrlv1", nAxes, nButtons, nPovs)
+           if not deviceInst or deviceInst < 0 then
+             log('E', logTag, 'unable to create remote controller input')
+           else
+-            virtualDevices[ip] = { deviceInst = deviceInst, state = {} }
++            virtualDevices[ip] = { deviceInst = deviceInst, state = { buttons = {}, axes = {} }, officialApp = (#args < 4), numbButtons = nButtons, numbAxes = nAxes }
+           end
+         end
+         if virtualDevices[ip] ~= nil then
+           log('D', logTag, 'sending hello back to: ' .. ip .. ':' .. appPort)
+-          local response = "beamng|" .. args[3]
++          local response
++
++          if #args > 3 then
++            response = "beamng|" .. args[3] .. "|custom_patch"
++          else -- support official app
++            response = "beamng|" .. args[3]
++          end
++
+           udpSocket:sendto(response, ip, appPort)
+         end
+       end
+     elseif virtualDevices[ip] ~= nil then
+-      local orientation = ffi.new("ori_t")
+-      -- notice the reverse - for the network endian byte order
+-      ffi.copy(orientation, data:reverse(), ffi.sizeof(orientation))
++      if virtualDevices[ip].officialApp then
++        local orientation = ffi.new("ori_t")
++        -- notice the reverse - for the network endian byte order
++        ffi.copy(orientation, data:reverse(), ffi.sizeof(orientation))
+ 
+ 
+-      --log('D', logTag, 'got data: ' .. orientation.x .. ', ' .. orientation.y .. ', ' .. orientation.z.. ', ' .. orientation.w)
++        --log('D', logTag, 'got data: ' .. orientation.x .. ', ' .. orientation.y .. ', ' .. orientation.z.. ', ' .. orientation.w)
+ 
+-      --log('D', logTag, "Got input package")
+-      --log('D', logTag, "Orientation: "..floor(orientation.x * 100)..", "..floor(orientation.y*100)..", "..floor(orientation.z*100))
+-      --log('D', logTag, string.format("Orientation: %0.2f, %0.2f, %0.2f", orientation.x, orientation.y, orientation.z))
++        --log('D', logTag, "Got input package")
++        --log('D', logTag, "Orientation: "..floor(orientation.x * 100)..", "..floor(orientation.y*100)..", "..floor(orientation.z*100))
++        --log('D', logTag, string.format("Orientation: %0.2f, %0.2f, %0.2f", orientation.x, orientation.y, orientation.z))
+ 
+-      local dev = virtualDevices[ip]
++        local dev = virtualDevices[ip]
+ 
+-      -- ask the vehicle to send the UI data to the target
+-      local vehicle = assignedPlayers[dev.deviceInst] and getPlayerVehicle(assignedPlayers[dev.deviceInst]) or nil
+-      if vehicle then
+-        -- we reuse the outgauge extension for updating the user interface of the app
+-        vehicle:queueLuaCommand('if outgauge then outgauge.sendPackage("' .. ip .. '", ' .. appPort .. ', ' .. orientation.w .. ') end')
+-      end
++        -- ask the vehicle to send the UI data to the target
++        local vehicle = assignedPlayers[dev.deviceInst] and getPlayerVehicle(assignedPlayers[dev.deviceInst]) or nil
++        if vehicle then
++          -- we reuse the outgauge extension for updating the user interface of the app
++          vehicle:queueLuaCommand('if outgauge then outgauge.sendPackage("' .. ip .. '", ' .. appPort .. ', ' .. orientation.w .. ') end')
++        end
++
++        -- normalize data
++        orientation.x = min(1, max(0, orientation.x))
++        orientation.y = min(1, max(0, orientation.y))
++        orientation.z = min(1, max(0, orientation.z))
++
++        -- send the received input events to the vehicle
++        local state = {
++          button0 = (orientation.x > 0.5) and 1 or 0,
++          button1 = (orientation.y > 0.5) and 1 or 0,
++          axis0 = orientation.z
++        }
++        if dev.state.button0 ~= state.button0 then extensions.core_input_virtualInput.emit(dev.deviceInst, "button", 0, (state.button0 > 0.5) and "down" or "up", state.button0) end
++        if dev.state.button1 ~= state.button1 then extensions.core_input_virtualInput.emit(dev.deviceInst, "button", 1, (state.button1 > 0.5) and "down" or "up", state.button1) end
++        if dev.state.axis0   ~= state.axis0   then extensions.core_input_virtualInput.emit(dev.deviceInst,   "axis", 0,                                 "change", state.axis0  ) end
++        dev.state = state
++      else
++        local dev = virtualDevices[ip]
+ 
+-      -- normalize data
+-      orientation.x = min(1, max(0, orientation.x))
+-      orientation.y = min(1, max(0, orientation.y))
+-      orientation.z = min(1, max(0, orientation.z))
+-
+-      -- send the received input events to the vehicle
+-      local state = {
+-        button0 = (orientation.x > 0.5) and 1 or 0,
+-        button1 = (orientation.y > 0.5) and 1 or 0,
+-        axis0 = orientation.z
+-      }
+-      if dev.state.button0 ~= state.button0 then extensions.core_input_virtualInput.emit(dev.deviceInst, "button", 0, (state.button0 > 0.5) and "down" or "up", state.button0) end
+-      if dev.state.button1 ~= state.button1 then extensions.core_input_virtualInput.emit(dev.deviceInst, "button", 1, (state.button1 > 0.5) and "down" or "up", state.button1) end
+-      if dev.state.axis0   ~= state.axis0   then extensions.core_input_virtualInput.emit(dev.deviceInst,   "axis", 0,                                 "change", state.axis0  ) end
+-      dev.state = state
++        local dataRev = data:reverse()
++
++        local packetId = struct.unpack("f", dataRev, 1)
++
++        -- ask the vehicle to send the UI data to the target
++        local vehicle = assignedPlayers[dev.deviceInst] and getPlayerVehicle(assignedPlayers[dev.deviceInst]) or nil
++        if vehicle then
++          -- we reuse the outgauge extension for updating the user interface of the app
++          vehicle:queueLuaCommand('if outgauge then outgauge.sendPackage("' .. ip .. '", ' .. appPort .. ', ' .. packetId .. ') end')
++        end
++
++        local dataIndex = 5 -- skip packet id
++        for i = 1,dev.numbButtons do
++          local val = struct.unpack("f", dataRev, dataIndex)
++          extensions.core_input_virtualInput.emit(dev.deviceInst, "button", i - 1, (val > 0.5) and "down" or "up", (val > 0.5) and 1 or 0)
++          dataIndex = dataIndex + 4
++        end
++
++        for i = 1,dev.numbAxes do
++          local val = struct.unpack("f", dataRev, dataIndex)
++          extensions.core_input_virtualInput.emit(dev.deviceInst, "axis", i - 1, "change", min(1, max(0, val)))
++          dataIndex = dataIndex + 4
++        end
++      end
+     end
+   end
+ end
