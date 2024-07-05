@@ -120,18 +120,27 @@
 +          vehicle:queueLuaCommand('if outgauge then outgauge.sendPackage("' .. ip .. '", ' .. appPort .. ', ' .. packetId .. ') end')
 +        end
 +
++        local state = {
++          buttons = {},
++          axes = {}
++        }
++
 +        local dataIndex = 5 -- skip packet id
 +        for i = 1,dev.numbButtons do
 +          local val = struct.unpack("f", dataRev, dataIndex)
-+          extensions.core_input_virtualInput.emit(dev.deviceInst, "button", i - 1, (val > 0.5) and "down" or "up", (val > 0.5) and 1 or 0)
++          if dev.state.buttons[i] ~= val then extensions.core_input_virtualInput.emit(dev.deviceInst, "button", i - 1, (val > 0.5) and "down" or "up", (val > 0.5) and 1 or 0) end
++          state.buttons[i] = val
 +          dataIndex = dataIndex + 4
 +        end
 +
 +        for i = 1,dev.numbAxes do
 +          local val = struct.unpack("f", dataRev, dataIndex)
-+          extensions.core_input_virtualInput.emit(dev.deviceInst, "axis", i - 1, "change", min(1, max(0, val)))
++          if dev.state.axes[i] ~= val then extensions.core_input_virtualInput.emit(dev.deviceInst, "axis", i - 1, "change", min(1, max(0, val))) end
++          state.axes[i] = val
 +          dataIndex = dataIndex + 4
 +        end
++
++       dev.state = state
 +      end
      end
    end
