@@ -90,6 +90,7 @@ namespace BeamNG.RemoteControlPatcher
             try
             {
                 patch(gameFolder, supportUltra);
+                Console.WriteLine("Restart the game to apply changes");
             }
             catch (Exception ex)
             {
@@ -151,6 +152,7 @@ namespace BeamNG.RemoteControlPatcher
             try
             {
                 restore(gameFolder);
+                Console.WriteLine("Restart the game to apply changes");
             }
             catch (Exception ex)
             {
